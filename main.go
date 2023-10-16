@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/csv"
 	"fmt"
 	"log"
 	"net/url"
@@ -76,7 +77,7 @@ func normalizeURL(parsedURL *url.URL) (string, error) {
 	parsedURL.Host = strings.ToLower(parsedURL.Host)
 	parsedURL.Path = url.PathEscape(parsedURL.Path)
 	parsedURL.RawQuery = parsedURL.Query().Encode()
-	parsedURL.Fragment = ""
+	//parsedURL.Fragment = ""
 
 	return parsedURL.String(), nil
 }
@@ -150,84 +151,124 @@ func addHost(site string) error {
 	return nil
 }
 
-func main() {
-	targetWebsites := []string{
-		"https://pornsites.xxx/",
-		"https://www.premiumpornlist.com/",
-		"https://area51.to/en/",
-		"https://pornwhitelist.com/",
-		"https://www.nu-bay.com/categories",
-		"http://bigpornlist.com/",
-		"https://www.pornpics.com/",
-		"https://adultspy.com/porn-lists/",
-		"https://toplist18.com/",
-		"https://allpornsites.net/",
-		"https://thepornbin.com/",
-		"https://listofporn.com/",
-		"https://www.lindylist.org/",
-		"https://freyalist.com/",
-		"https://jennylist.xyz/category/list",
-		"https://orgasmlist.com/",
-		"https://abellalist.com/",
-		"https://www.youpornlist.com/",
-		"https://pornmate.com/",
-		"https://bestlistofporn.com/",
-		"https://www.iwantporn.net/",
-		"https://porngeek.com/",
-		"https://tubepornlist.com/",
-		"https://pornlist18.com/",
-		"https://www.tblop.com/",
-		"https://thesexlist.com/",
-		"https://reachporn.com/",
-		"https://fivestarpornsites.com/",
-		"https://www.primepornlist.com/",
-		"https://bestpornsites.org/",
-		"https://getpornlist.com/",
-		"https://mypornbible.com/",
-		"https://darkpornlist.com/",
-		"https://onepornlist.com/",
-		"https://www.pornlist.tv/",
-		"http://abellalist.com/",
-		"https://nichepornsites.com/the-50-best-free-porn-sites/",
-		"https://www.elephantlist.com/",
-		"https://mygaysites.com/",
-		"https://pornlist.co/",
-		"https://www.mypornlist.net/",
-		"https://www.thepornlist.net/",
-	}
-	blockListCSV, err := os.Create("blockListCSV.csv")
+func removeSites(sitesToRemove []string) error {
+	siteList := "blockListCSV.csv"
+	file, err := os.Open(siteList)
 	if err != nil {
-		fmt.Println(err)
-		return
+		return err
 	}
-	defer blockListCSV.Close()
+	defer file.Close()
 
-	blockListText, err := os.Create("blockListText.txt")
+	reader := csv.NewReader(file)
+	lines, err := reader.ReadAll()
 	if err != nil {
-		fmt.Println(err)
-		return
+		return err
 	}
-	defer blockListText.Close()
 
-	for i, list := range targetWebsites {
+	file.Close()
+
+	file, err = os.Create(siteList)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+
+	for _, line := range lines {
+		site := line[0]
+		if !isInList(sitesToRemove, site) {
+			writer.Write(line)
+		}
+	}
+
+	fmt.Println("Sites removed from the file.")
+	return nil
+}
+
+func isInList(slice []string, item string) bool {
+	for _, a := range slice {
+		if a == item {
+			return true
+		}
+	}
+	return false
+}
+
+func readLines(pathOrURL string) ([]string, error) {
+	_, err := url.ParseRequestURI(pathOrURL)
+	fmt.Println(url.ParseRequestURI(pathOrURL))
+	if err != nil {
+		file, err := os.Open(pathOrURL)
+		if err != nil {
+			return nil, err
+		}
+		defer file.Close()
+
+		var lines []string
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			line := scanner.Text()
+			line = strings.Trim(line, "\"")     // Remove double quotes
+			line = strings.TrimRight(line, ",") // Remove trailing comma
+			lines = append(lines, line)
+		}
+		return lines, scanner.Err()
+	} else {
+		return []string{string(pathOrURL)}, nil
+	}
+}
+
+func ExternalURLs(fileNameOrURL string) {
+
+	var externalLinks2 *os.File
+	var err error
+	var targetList []string
+	targetList, _ = readLines(fileNameOrURL)
+	fmt.Println(targetList)
+	sitesToRemove := []string{"reddit.com", "facebook.com", "twitter.com", "twitter.com", "google.com", "amazon.com"}
+	if !isValidLink(fileNameOrURL) {
+
+		externalLinks2, err = os.Create(fileNameOrURL + "_external_links.csv")
+		if err != nil {
+			log.Fatal(err)
+			fmt.Println(err)
+		}
+		defer externalLinks2.Close()
+	} else {
+		u, _ := url.Parse(fileNameOrURL)
+		externalLinks2, err = os.Create(u.Host + "_external_links.csv")
+		if err != nil {
+			log.Fatal(err)
+			fmt.Println(err)
+		}
+		defer externalLinks2.Close()
+
+	}
+
+	for i, list := range targetList {
+		fmt.Println(i)
 		doc, err := goquery.NewDocument(list)
-		fmt.Println(i, " ", list)
 		if err != nil {
 			log.Fatal(err)
 		}
-
 		u, _ := url.Parse(list)
-
+		// TODO: make this more flexible to find any kind of links in a page
 		doc.Find("a").Each(func(_ int, s *goquery.Selection) {
 			href, _ := s.Attr("href")
 			if isValidLink(href) {
 				linkURL, _ := url.Parse(href)
 				if linkURL == nil || (linkURL.Host != "" && linkURL.Host != u.Host) {
 					blockList.Add(href)
-					fmt.Fprintln(blockListText, href)
+					//fmt.Fprintln(externalLinks, href)
 				}
 			}
 		})
+	}
+
+	if err := removeSites(sitesToRemove); err != nil {
+		fmt.Println("Error:", err)
 	}
 	//Extract keys from the map.
 	keys := make([]string, 0, len(blockList))
@@ -240,9 +281,13 @@ func main() {
 	})
 	for _, link := range keys {
 		// Write the link to the CSV file.
-		fmt.Fprintln(blockListCSV, link)
+		fmt.Fprintln(externalLinks2, link)
 
-		// Write the link to the TXT file.
-		fmt.Fprintln(blockListText, link)
 	}
+}
+
+func main() {
+	filename := "https://en.wikipedia.org/wiki/List_of_most-visited_websites"
+	ExternalURLs(filename)
+
 }
