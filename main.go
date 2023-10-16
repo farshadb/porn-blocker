@@ -1,36 +1,153 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"log"
 	"net/url"
 	"os"
+	"regexp"
+	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/PuerkitoBio/goquery"
+	"golang.org/x/text/runes"
+	"golang.org/x/text/transform"
+	"golang.org/x/text/unicode/norm"
 )
 
-var blockList = make(map[string]bool)
+// implement a set-like structure and check for duplicates
+type LinkSet map[string]bool
 
-var searchList = make(map[string]bool)
+var blockList = NewLink()
+var hosts = "hosts.txt"
 
-// func addToTargetList(newLink string) {
-// 	if searchList[newLink] {
-// 		n++
-// 		fmt.Println(newLink)
+func NewLink() LinkSet {
+	return make(LinkSet)
+}
 
-// 		return
-// 	} else {
-// 		searchList[newLink] = true
-// 	}
-// }
+func (link LinkSet) Add(item string) {
 
-func addToBlockList(newLink string) {
-	if blockList[newLink] {
+	addHost(getHost(item))
+	// Normalize before parsing
+	lowerCaseURL := strings.ToLower(item)
+
+	// Parse the URL
+	parsedURL, err := url.Parse(lowerCaseURL)
+	if err != nil {
 		return
-	} else {
-		blockList[newLink] = true
 	}
+	// Normalize after parsing
+	canonicalURL, _ := normalizeURL(parsedURL)
+
+	// Extract domain
+	normalizedDomain := normalizeString(canonicalURL)
+	domain := getDomain(normalizedDomain)
+
+	if !blockList.Contains(domain) {
+		blockList[domain] = true
+	}
+}
+
+func (link LinkSet) Contains(item string) bool {
+	return blockList[item]
+
+}
+
+func normalizeString(s string) string {
+	s = strings.ToLower(s)
+	s = strings.TrimSpace(s)
+	s = removeAccents(s)
+	return norm.NFC.String(s)
+}
+
+func removeAccents(s string) string {
+	t := transform.Chain(norm.NFD, runes.Remove(runes.In(unicode.Mn)), norm.NFC)
+	s, _, _ = transform.String(t, s)
+	return s
+}
+
+func normalizeURL(parsedURL *url.URL) (string, error) {
+	if parsedURL == nil {
+		return "", fmt.Errorf("parsedURL is nil")
+	}
+	parsedURL.Scheme = strings.ToLower(parsedURL.Scheme)
+	parsedURL.Host = strings.ToLower(parsedURL.Host)
+	parsedURL.Path = url.PathEscape(parsedURL.Path)
+	parsedURL.RawQuery = parsedURL.Query().Encode()
+	parsedURL.Fragment = ""
+
+	return parsedURL.String(), nil
+}
+func isValidLink(link string) bool {
+
+	_, err := url.ParseRequestURI(link)
+	if err != nil {
+		return false
+	}
+
+	u, err := url.Parse(link)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return false
+	}
+
+	return true
+}
+
+func getDomain(newLink string) string {
+	//regular expression pattern to capture the main domain
+	re := regexp.MustCompile(`(?:https?://)?(?:www\.)?([^/?&]+)`)
+	match := re.FindStringSubmatch(newLink)
+
+	if len(match) > 1 {
+		domain := match[1]
+
+		// Remove subdomains by splitting on "." and taking the last two parts
+		parts := strings.Split(domain, ".")
+		if len(parts) > 2 {
+			domain = parts[len(parts)-2] + "." + parts[len(parts)-1]
+		}
+
+		// Replace "?" with "/" in the domain
+		domain = strings.Replace(domain, "?", "/", -1)
+		return domain
+	}
+	return ""
+}
+
+func getHost(link string) string {
+	u, err := url.ParseRequestURI(link)
+	if err != nil {
+		return ""
+	}
+
+	parts := strings.Split(u.Host, ".")
+	if len(parts) > 2 {
+		return parts[len(parts)-2] + "." + parts[len(parts)-1]
+	}
+
+	return u.Host
+}
+
+func addHost(site string) error {
+	file, err := os.OpenFile(hosts, os.O_RDWR|os.O_CREATE, 0755)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		if scanner.Text() == site {
+			return nil
+		}
+	}
+
+	if _, err := file.WriteString(site + "\n"); err != nil {
+		return err
+	}
+	return nil
 }
 
 func main() {
@@ -78,76 +195,54 @@ func main() {
 		"https://www.mypornlist.net/",
 		"https://www.thepornlist.net/",
 	}
+	blockListCSV, err := os.Create("blockListCSV.csv")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer blockListCSV.Close()
 
-	for _, list := range targetWebsites {
+	blockListText, err := os.Create("blockListText.txt")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer blockListText.Close()
 
+	for i, list := range targetWebsites {
 		doc, err := goquery.NewDocument(list)
+		fmt.Println(i, " ", list)
 		if err != nil {
 			log.Fatal(err)
 		}
+
 		u, _ := url.Parse(list)
-		//fmt.Println(u)
-		siteName := strings.ReplaceAll(u.Host, ".", "_")
-
-		internalFile, err := os.Create(siteName + "_internal_links.txt")
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer internalFile.Close()
-
-		externalFile, err := os.Create(siteName + "_external_links.txt")
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer externalFile.Close()
-
-		// Create a new TXT file.
-		finalTxt, err := os.Create("links.txt")
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-		defer finalTxt.Close()
 
 		doc.Find("a").Each(func(_ int, s *goquery.Selection) {
-			href, exists := s.Attr("href")
-			if exists {
-				if blockList[href] {
-					linkURL, _ := url.Parse(href)
-					if linkURL != nil && (linkURL.Host == "" || linkURL.Host == u.Host) {
-						fmt.Fprintln(internalFile, href)
-					} else {
-						addToBlockList(href)
-						fmt.Fprintln(finalTxt, href)
-					}
+			href, _ := s.Attr("href")
+			if isValidLink(href) {
+				linkURL, _ := url.Parse(href)
+				if linkURL == nil || (linkURL.Host != "" && linkURL.Host != u.Host) {
+					blockList.Add(href)
+					fmt.Fprintln(blockListText, href)
 				}
 			}
 		})
 	}
-
-	finalBlockListCSV, err := os.Create("finalBlockListCSV.csv")
-	if err != nil {
-		fmt.Println(err)
-		return
+	//Extract keys from the map.
+	keys := make([]string, 0, len(blockList))
+	for k := range blockList {
+		keys = append(keys, k)
 	}
-	defer finalBlockListCSV.Close()
-
-	finalWebsiteTXT, err := os.Create("finalWebsiteTXT.txt")
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	defer finalWebsiteTXT.Close()
-
-	for link := range blockList {
-		// Remove "http://" from the link.
-		link = strings.TrimPrefix(link, "http://")
-
+	// Sort keys slice based on the length of the key.
+	sort.Slice(keys, func(i, j int) bool {
+		return len(keys[i]) < len(keys[j])
+	})
+	for _, link := range keys {
 		// Write the link to the CSV file.
-		fmt.Fprintln(finalBlockListCSV, link)
+		fmt.Fprintln(blockListCSV, link)
 
 		// Write the link to the TXT file.
-		fmt.Fprintln(finalWebsiteTXT, link)
+		fmt.Fprintln(blockListText, link)
 	}
-
 }
