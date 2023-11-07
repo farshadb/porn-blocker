@@ -22,6 +22,7 @@ import (
 type LinkSet map[string]bool
 
 var blockList = NewLink()
+var internalList = NewLink()
 var hosts = "hosts.txt"
 
 func NewLink() LinkSet {
@@ -29,11 +30,9 @@ func NewLink() LinkSet {
 }
 
 func (link LinkSet) Add(item string) {
-
 	addHost(getHost(item))
 	// Normalize before parsing
 	lowerCaseURL := strings.ToLower(item)
-
 	// Parse the URL
 	parsedURL, err := url.Parse(lowerCaseURL)
 	if err != nil {
@@ -41,7 +40,6 @@ func (link LinkSet) Add(item string) {
 	}
 	// Normalize after parsing
 	canonicalURL, _ := normalizeURL(parsedURL)
-
 	// Extract domain
 	normalizedDomain := normalizeString(canonicalURL)
 	domain := getDomain(normalizedDomain)
@@ -53,7 +51,14 @@ func (link LinkSet) Add(item string) {
 
 func (link LinkSet) Contains(item string) bool {
 	return blockList[item]
+}
 
+func HandleError(err error) error {
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func normalizeString(s string) string {
@@ -84,9 +89,7 @@ func normalizeURL(parsedURL *url.URL) (string, error) {
 func isValidLink(link string) bool {
 
 	_, err := url.ParseRequestURI(link)
-	if err != nil {
-		return false
-	}
+	HandleError(err)
 
 	u, err := url.Parse(link)
 	if err != nil || u.Scheme == "" || u.Host == "" {
@@ -133,9 +136,7 @@ func getHost(link string) string {
 
 func addHost(site string) error {
 	file, err := os.OpenFile(hosts, os.O_RDWR|os.O_CREATE, 0755)
-	if err != nil {
-		return err
-	}
+	HandleError(err)
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
@@ -154,23 +155,17 @@ func addHost(site string) error {
 func removeSites(sitesToRemove []string) error {
 	siteList := "blockListCSV.csv"
 	file, err := os.Open(siteList)
-	if err != nil {
-		return err
-	}
+	HandleError(err)
 	defer file.Close()
 
 	reader := csv.NewReader(file)
 	lines, err := reader.ReadAll()
-	if err != nil {
-		return err
-	}
+	HandleError(err)
 
 	file.Close()
 
 	file, err = os.Create(siteList)
-	if err != nil {
-		return err
-	}
+	HandleError(err)
 	defer file.Close()
 
 	writer := csv.NewWriter(file)
@@ -220,14 +215,15 @@ func readLines(pathOrURL string) ([]string, error) {
 	}
 }
 
-func ExternalURLs(fileNameOrURL string) {
+func findURLs(fileNameOrURL string) {
 
 	var externalLinks2 *os.File
 	var err error
 	var targetList []string
 	targetList, _ = readLines(fileNameOrURL)
 	fmt.Println(targetList)
-	sitesToRemove := []string{"reddit.com", "facebook.com", "twitter.com", "twitter.com", "google.com", "amazon.com"}
+	sitesToRemove := []string{""}
+
 	if !isValidLink(fileNameOrURL) {
 
 		externalLinks2, err = os.Create(fileNameOrURL + "_external_links.csv")
@@ -244,7 +240,6 @@ func ExternalURLs(fileNameOrURL string) {
 			fmt.Println(err)
 		}
 		defer externalLinks2.Close()
-
 	}
 
 	for i, list := range targetList {
@@ -254,6 +249,7 @@ func ExternalURLs(fileNameOrURL string) {
 			log.Fatal(err)
 		}
 		u, _ := url.Parse(list)
+		// TODO: in some cases: does not regonize links link this one "https://trends.netcraft.com/topsites"
 		// TODO: make this more flexible to find any kind of links in a page
 		doc.Find("a").Each(func(_ int, s *goquery.Selection) {
 			href, _ := s.Attr("href")
@@ -261,7 +257,9 @@ func ExternalURLs(fileNameOrURL string) {
 				linkURL, _ := url.Parse(href)
 				if linkURL == nil || (linkURL.Host != "" && linkURL.Host != u.Host) {
 					blockList.Add(href)
-					//fmt.Fprintln(externalLinks, href)
+					fmt.Println(href)
+				} else if linkURL == nil || (linkURL.Host != "" && linkURL.Host == u.Host) {
+					internalList.Add(href)
 				}
 			}
 		})
@@ -287,7 +285,7 @@ func ExternalURLs(fileNameOrURL string) {
 }
 
 func main() {
-	filename := "https://en.wikipedia.org/wiki/List_of_most-visited_websites"
-	ExternalURLs(filename)
+	filename := "https://twitter.com/i/bookmarks"
+	findURLs(filename)
 
 }
